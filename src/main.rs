@@ -54,6 +54,57 @@ async fn root() -> &'static str {
 }
 
 
+async fn get_balance(Json(payload): Json<GetBalance>) -> Result<Balance, E> {
+
+    let address = payload.address.parse::<Address>()?;
+    let token = payload.token.parse::<Address>()?;
+
+    // 1. Generate the ABI for the ERC20 contract. This is will define an `ERC20Contract` struct in
+    // this scope that will let us call the methods of the contract.
+
+    abigen!(
+        ERC20Contract,
+        r#"[
+            function balanceOf(address account) external view returns (uint256)
+            function decimals() external view returns (uint8)
+            function symbol() external view returns (string memory)
+            function transfer(address to, uint256 amount) external returns (bool)
+            event Transfer(address indexed from, address indexed to, uint256 value)
+        ]"#,
+    );
+
+    // 2. Create the contract instance to let us call methods of the contract and let it sign
+    // transactions with the sender wallet.
+
+    let provider =
+        Provider::<Http>::try_from("https://mainnet.infura.io/v3/" + process.env.INFURA_KEY)?.interval(Duration::from_millis(10u64));
+
+    // Chain ID
+    let chain_id = provider.get_chainid().await?;
+
+    let signer = Arc::new(SignerMiddleware::new(provider, wallet.with_chain_id(chain_id.as_u64())));
+
+    let contract = ERC20Contract::new(token, signer);
+
+    // 3. Fetch the decimals used by the contract so we can compute the decimal amount to send.
+
+    let balance = contract.balance_of(address).call().await?;
+
+    println!("Balance: {}", balance);
+
+    let decimals = contract.decimals().call().await?;
+    let symbol = contract.symbol().call().await?;
+    let balance = balance.as_u64() / U256::exp10(decimals as usize).as_u64();
+
+    Ok(Balance {
+        balance,
+        decimals,
+        symbol,
+    })
+    
+}
+
+
 // Basic Function to Send USDC
 async fn send_usdc(Json(payload): Json<SendUsdc>) -> Result<T, E> {
 
@@ -191,7 +242,24 @@ struct SendUsdc {
     amount: u64,
 }
 
+#[derive(Deserialize, Serialize)]
+
 struct SendEuroc {
     receiver: String,
     amount: u64,
+}
+
+#[derive(Deserialize, Serialize)]
+
+struct GetBalance {
+    address: String,
+    token: String,
+}
+
+#[derive(Deserialize, Serialize)]
+
+struct Balance {
+    balance: u64,
+    decimals: u8,
+    symbol: String,
 }
